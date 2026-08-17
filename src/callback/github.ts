@@ -60,6 +60,14 @@ export async function handleGithubCallback(url: URL, config: Config): Promise<Re
     const ghToken = await gh.exchangeCode(code, config.githubClientId, config.githubClientSecret, redirectUri);
     const user = await gh.getUser(ghToken);
 
+    // Ban check first: a banned GitHub account is declined even if it already has
+    // a matching ver: record, so banning takes effect on re-verification rather
+    // than only for first-time verifiers.
+    const owner = await kv.getGithubOwner(config.kv, user.id);
+    if (owner !== null && owner.banned) {
+      throw new DenyError("This GitHub account is banned from this service.", user.login);
+    }
+
     // Idempotency: a matching verification record means a prior callback already
     // approved this join request (e.g. a browser refresh, since the GitHub code
     // is single-use). Re-show the approved page and re-fire the (idempotent)
@@ -75,12 +83,8 @@ export async function handleGithubCallback(url: URL, config: Config): Promise<Re
       throw new DenyError(q.reason ?? "quality check failed", user.login);
     }
 
-    const owner = await kv.getGithubOwner(config.kv, user.id);
     if (owner !== null && owner.tg_user_id !== tgUserId && !config.allowReuseGithub) {
       throw new DenyError("This GitHub account is already linked to another Telegram user.", user.login);
-    }
-    if (owner !== null && owner.banned) {
-      throw new DenyError("This GitHub account is banned from this service.", user.login);
     }
 
     await kv.setVerification(config.kv, tgUserId, {

@@ -49,14 +49,14 @@ package.json      脚本：dev / deploy / typecheck / dry-run / kv:create
 3. Telegram 在加群流程内联打开 Mini App，并注入 `initData`（含 `chat_join_request_query_id`、`user`、`chat`、`auth_date`、`hash`、`signature`）。
 4. Mini App 加载后 `POST /github/oauth`，body 为 `{initData}`。服务端 `validateInitData` 校验 HMAC + 新鲜度（`INIT_DATA_MAX_AGE_SEC`），确认含 `chat_join_request_query_id`，返回 GitHub authorize URL，`state` 即 `initData` 原串。
 5. Mini App 用 `Telegram.WebApp.openLink(url, {try_instant_view:false})` 在外部浏览器走 GitHub OAuth。Mini App 不轮询：结果在外部浏览器的回调页展示。
-6. GitHub 回调 `/github/callback?code&state=<initData>`：`validateInitData` 再次校验 `state`，取出 `chat_join_request_query_id`（queryId）与 `user.id`（tg_user_id）；换 GitHub token、拉 /user、跑质量检查 + `gh:<github_id>` 去重，写 `ver:<tg_user_id>` 与 `gh:<github_id>`，调用 `answerChatJoinRequestQuery(queryId, approve|decline)`。全程无 session 读写。
+6. GitHub 回调 `/github/callback?code&state=<initData>`：`validateInitData` 再次校验 `state`，取出 `chat_join_request_query_id`（queryId）与 `user.id`（tg_user_id）；换 GitHub token、拉 /user、查 `gh:<github_id>` 命中 `banned` 则直接拒绝，跑质量检查 + `gh:<github_id>` 去重，写 `ver:<tg_user_id>` 与 `gh:<github_id>`，调用 `answerChatJoinRequestQuery(queryId, approve|decline)`。全程无 session 读写。
 
 ## KV 数据布局（单命名空间，前缀键）
 
 | 键 | 值 | TTL |
 |---|---|---|
 | `ver:<tg_user_id>` | `{github_id, github_login, verified_at}` | 永久 |
-| `gh:<github_id>` | `tg_user_id` | 永久 |
+| `gh:<github_id>` | `{tg_user_id, banned}` | 永久 |
 
 加群流程本身无 session 存储：join-request 所需状态全部在 Telegram 签名的 `initData` 里，经 Mini App 与 GitHub OAuth 透传，服务端验签即用。
 
@@ -64,7 +64,7 @@ package.json      脚本：dev / deploy / typecheck / dry-run / kv:create
 
 - `BASE_URL`、`GROUP_CHAT_ID` 已移除：Worker 公网地址一律从入站请求动态推导（`new URL(request.url).origin`），不再可配置；如需限定单群，自行在 webhook 处加判断。
 - `GITHUB_MIN_AGE_DAYS`（默认 90）、`GITHUB_MIN_REPOS`（默认 0）、`ALLOW_REUSE_GITHUB`（默认 false）。
-- `INIT_DATA_MAX_AGE_SEC`（默认 86400）：`initData` 新鲜度窗口，同时覆盖 `/github/oauth` 与 `/github/callback`（`initData` 兼作 OAuth `state`，OAuth 往返通常远小于 1 天）。
+- `INIT_DATA_MAX_AGE_SEC`（默认 86400，wrangler.toml 实际配置为 3600）：`initData` 新鲜度窗口，同时覆盖 `/github/oauth` 与 `/github/callback`（`initData` 兼作 OAuth `state`，OAuth 往返通常远小于 1 天）。
 
 密钥用 `wrangler secret put` 设置：`BOT_TOKEN`、`GITHUB_CLIENT_ID`、`GITHUB_CLIENT_SECRET`。
 
@@ -97,6 +97,7 @@ curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<WORKER>/webhoo
 - 永远在服务端校验 `initData`，不可信任客户端传入的 user id。本仓库在 `/github/oauth` 与 `/github/callback` 都跑 `validateInitData`（HMAC-SHA256：secret = HMAC(key=`WebAppData`, msg=bot_token)，再 hash = HMAC(key=secret, msg=data_check_string)）+ 新鲜度检查。注意 secret 派生里 `WebAppData` 是 key、bot_token 是 msg（与 Bot API 文档措辞 「WebAppData used as a key」一致；已用真实加群 initData 实测确认）。
 - GitHub `state` 即 Telegram 签名的 `initData`，回调绑定回原加群请求；`hash` 防伪造，`auth_date` + `INIT_DATA_MAX_AGE_SEC` 防重放。无服务端 session 存储。
 - `gh:<github_id>` 去重防一个 GitHub 给多个 TG 账号用，`ALLOW_REUSE_GITHUB=true` 可放开。
+- `gh:<github_id>` 的 `banned` 字段用于封禁特定 GitHub 账号。封禁检查在回调里优先于幂等重批与去重，已验证过的账号被封后重新验证也会被拒绝。封禁只能手动写 KV：`wrangler kv key put --binding KV 'gh:<github_id>' '{"tg_user_id":0,"banned":true}'`（`tg_user_id` 可填 0，封禁检查只读 `banned`）。`setGithubOwner` 只在正常验证通过时写 `banned:false`，被封账号在检查阶段即被拒，不会走到覆写。
 - 回调页用 `escapeHtml` 转义所有用户/错误字符串，防 XSS。
 - Webhook 无路径 secret：加群请求唯一副作用是返回 `sendChatJoinRequestWebApp` 调用，仅 Telegram 自己会执行，伪造请求无害。如需额外加固可用 `setWebhook` 的 `secret_token` header 校验（未默认启用）。
 - webhook 以 HTTP 响应体返回 `sendChatJoinRequestWebApp` 调用；该方法对 bot 不可用（`supports_join_request_queries` 未启用或 BotFather 未配置 Mini App）时 Telegram 会重试 webhook，需先在 BotFather 开启。
@@ -109,8 +110,9 @@ curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<WORKER>/webhoo
 ## 已知限制 / 后续可扩展
 
 - 去重索引 `gh:` 与验证记录 `ver:` 都是全局的（一个 bot 实例），跨群共用。若要多群各自独立，键需带上 chat_id；当前设计假设单群部署（已移除 `GROUP_CHAT_ID` 限定，如需可自行在 webhook 加 chat_id 白名单）。
+- 封禁（`gh:` 的 `banned:true`）只能手动写 KV，没有管理端点；解封同理（改写为 `banned:false` 或删除该键）。
 - 质量检查仅看 `created_at` 与 `public_repos`；要更强可加 followers / 提交活动 / 邮箱验证（需额外 GitHub scope）。
-- `/github/callback` 的错误策略：GitHub 账号本身的问题（质量不达标、已被其他 TG 账号绑定）抛 `DenyError` → `answerChatJoinRequestQuery("decline")` 并向用户说明原因；其余异常（GitHub 5xx、网络抖动、code 已被消费、KV 故障、Telegram API 抖动等）视为瞬时/不确定 → `answerChatJoinRequestQuery("queue")` 转人工复核，而非直接拒绝。happy path 不再逐处 `.catch`，统一交外层 try/catch 处理并渲染用户可见页面。
+- `/github/callback` 的错误策略：GitHub 账号本身的问题（质量不达标、已被其他 TG 账号绑定、被封禁）抛 `DenyError` → `answerChatJoinRequestQuery("decline")` 并向用户说明原因；其余异常（GitHub 5xx、网络抖动、code 已被消费、KV 故障、Telegram API 抖动等）视为瞬时/不确定 → `answerChatJoinRequestQuery("queue")` 转人工复核，而非直接拒绝。happy path 不再逐处 `.catch`，统一交外层 try/catch 处理并渲染用户可见页面。
 - 已移除 auto-approve 快路径与私聊 `web_app` 按钮回退：webhook 只返回 `sendChatJoinRequestWebApp`，要求 bot 为 guard bot。返回用户重新走完 Mini App，但回调对匹配的 `ver:` 记录短路重批，不再重复质量/去重检查。
 - `chat_join_request_query_id` 出现在 `initData` 是 Bot API 10.1 join-request launch context 的实测行为（官方 WebAppInitData 文档未显式记录此字段）；若 Telegram 改动此行为需重新确认。
 - 路由已按 provider 拆分（`/github/oauth`、`/github/callback`），为后续新增其他身份提供者预留命名空间；对应处理代码在 `src/oauth/` 与 `src/callback/` 子目录。

@@ -25,8 +25,8 @@ User clicks invite link → join request created (not yet a member)
    → Mini App opens the GitHub authorize URL (state = initData)
    → GitHub redirects to /github/callback?code=...&state=...
    → server re-validates initData (the state), extracts chat_join_request_query_id +
-     user.id, exchanges the code, fetches api.github.com/user, runs quality checks +
-     dedup, and calls answerChatJoinRequestQuery(approve|decline|queue)
+     user.id, exchanges the code, fetches api.github.com/user, checks the ban flag,
+     runs quality checks + dedup, and calls answerChatJoinRequestQuery(approve|decline|queue)
    → the result is shown in the browser callback page (the Mini App does not poll)
 ```
 
@@ -80,6 +80,8 @@ custom domain) so those URLs stay consistent across requests.
 | `ALLOW_REUSE_GITHUB` | `false` | If `true`, one GitHub account may verify multiple Telegram users |
 | `INIT_DATA_MAX_AGE_SEC` | `86400` | Max accepted age of Telegram Mini App `initData` (also the freshness window for it as the OAuth `state`) |
 
+Beyond these gates, individual GitHub accounts can be banned: the `gh:<github_id>` KV record carries a `banned` flag, and banned accounts are declined at the callback (checked before dedup and before the idempotent re-approve path). Bans are managed by writing the KV record directly with `wrangler kv` — there is no admin endpoint.
+
 ## Deploy and wire the webhook
 
 ```bash
@@ -110,7 +112,7 @@ Single KV namespace, prefixed keys:
 | Key | Value | TTL |
 |---|---|---|
 | `ver:<tg_user_id>` | `{ github_id, github_login, verified_at }` | none (permanent) |
-| `gh:<github_id>` | `<tg_user_id>` (dedup index) | none (permanent) |
+| `gh:<github_id>` | `{ tg_user_id, banned }` (dedup index + ban flag) | none (permanent) |
 
 The join-request flow stores **no session**: Telegram's signed `initData` carries
 the join-request context (chat_join_request_query_id, user.id, chat.id) and
@@ -128,6 +130,10 @@ record and re-approves without re-running the quality/dedup checks.
   `INIT_DATA_MAX_AGE_SEC` prevents replay. No session is stored server-side.
 - Dedup (`gh:` index) prevents one GitHub account from being reused by many Telegram
   accounts (toggle with `ALLOW_REUSE_GITHUB`).
+- The `gh:<github_id>` record also carries a `banned` flag. Banned GitHub accounts
+  are declined at the callback, checked before dedup and before the idempotent
+  re-approve path so banning sticks for already-verified accounts. Bans are managed
+  by writing the KV record directly (`wrangler kv key put --binding KV 'gh:<github_id>' '{"tg_user_id":0,"banned":true}'`); there is no admin endpoint.
 - Serve the Mini App and the GitHub callback from the **same domain** (the Worker
   domain) — Bot API 10.2 hardened Mini App origins in July 2026.
 - If GitHub OAuth inside the Mini App webview misbehaves on a platform, the Mini App
@@ -149,7 +155,7 @@ record and re-approves without re-running the quality/dedup checks.
 - `src/oauth/github.ts` — `/github/oauth`: validates `initData` and returns the GitHub authorize URL.
 - `src/callback/github.ts` — `/github/callback`: re-validates `initData`, exchanges the code, runs quality/dedup, resolves the join request, renders the callback page.
 - `src/callback/common/telegram.ts` — Bot API wrapper for `answerChatJoinRequestQuery` (shared by callback handlers).
-- `src/callback/common/store.ts` — KV verification/dedup helpers (shared by callback handlers).
+- `src/callback/common/store.ts` — KV verification/dedup/ban helpers (shared by callback handlers).
 
 All TypeScript that used to sit directly under `src/` (except `index.ts`) now lives in `src/common/`; `src/` root only holds the router entry and the four route subdirectories. Routes are namespaced per provider (`/github/oauth`, `/github/callback`) to leave room for additional providers under `src/oauth/` and `src/callback/` later.
 
