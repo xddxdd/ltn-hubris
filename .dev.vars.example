@@ -1,0 +1,4 @@
+# Copy to .dev.vars for `wrangler dev`, and set via `wrangler secret put <NAME>` for prod.
+BOT_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
+GITHUB_CLIENT_ID=your_github_oauth_app_client_id
+GITHUB_CLIENT_SECRET=your_github_oauth_app_client_secret

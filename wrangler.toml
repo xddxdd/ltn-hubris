@@ -1,0 +1,43 @@
+name = "ltn-hubris"
+main = "src/index.ts"
+compatibility_date = "2026-07-01"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "5537e653f7984d96a341f02820763db8"
+
+# Import Mini App HTML as plain text modules.
+[[rules]]
+type = "Text"
+globs = ["**/*.html"]
+fallthrough = true
+
+[observability]
+enabled = false
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+persist = true
+head_sampling_rate = 1
+
+[vars]
+# GitHub account quality gates.
+GITHUB_MIN_AGE_DAYS = "90"
+GITHUB_MIN_REPOS = "0"
+# If "true", the same GitHub account may verify multiple Telegram accounts.
+ALLOW_REUSE_GITHUB = "false"
+# Max age (seconds) of accepted Telegram Mini App initData. Default 1 day.
+# initData is Telegram-signed and carries the join-request context, so it doubles as
+# the GitHub OAuth `state`; this one freshness window covers both /github/oauth and
+# /github/callback. No KV session is held during the flow.
+INIT_DATA_MAX_AGE_SEC = "3600"
+
+[secrets]
+required = [ "BOT_TOKEN", "GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET" ]
