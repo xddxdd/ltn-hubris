@@ -8,7 +8,10 @@ and only then approves the join request.
 Uses the **Bot API 10.1 "Join Request Queries"** feature: the webhook returns the
 `sendChatJoinRequestWebApp` call as its response body so Telegram opens the Mini App
 inline in the join flow, and after GitHub verification the Worker calls
-`answerChatJoinRequestQuery` to approve/decline/queue — no separate bot chat, no DM with a link.
+`approveChatJoinRequest` / `declineChatJoinRequest` with the `chat_id` + `user_id`
+from the Telegram-signed `initData` to approve or decline the join request. Cases
+needing manual review are left open for a group admin — no separate bot chat, no
+DM with a link.
 
 ## How it works
 
@@ -24,9 +27,11 @@ User clicks invite link → join request created (not yet a member)
      (signature + freshness) and returns the GitHub authorize URL with state = initData
    → Mini App opens the GitHub authorize URL (state = initData)
    → GitHub redirects to /github/callback?code=...&state=...
-   → server re-validates initData (the state), extracts chat_join_request_query_id +
-     user.id, exchanges the code, fetches api.github.com/user, checks the ban flag,
-     runs quality checks + dedup, and calls answerChatJoinRequestQuery(approve|decline|queue)
+   → server re-validates initData (the state), extracts chat.id + user.id, exchanges
+     the code, fetches api.github.com/user, checks the ban flag, runs quality checks
+     + dedup, and calls approveChatJoinRequest / declineChatJoinRequest with
+     chat_id + user_id (transient/uncertain failures are not decided at all and
+     left for an admin to review)
    → the result is shown in the browser callback page (the Mini App does not poll)
 ```
 
@@ -154,7 +159,7 @@ record and re-approves without re-running the quality/dedup checks.
 - `src/miniapp/index.ts` + `src/miniapp/miniapp.html` — the Mini App verification UI (HTML imported as a text module).
 - `src/oauth/github.ts` — `/github/oauth`: validates `initData` and returns the GitHub authorize URL.
 - `src/callback/github.ts` — `/github/callback`: re-validates `initData`, exchanges the code, runs quality/dedup, resolves the join request, renders the callback page.
-- `src/callback/common/telegram.ts` — Bot API wrapper for `answerChatJoinRequestQuery` (shared by callback handlers).
+- `src/callback/common/telegram.ts` — Bot API wrappers for `approveChatJoinRequest` / `declineChatJoinRequest` (shared by callback handlers).
 - `src/callback/common/store.ts` — KV verification/dedup/ban helpers (shared by callback handlers).
 
 All TypeScript that used to sit directly under `src/` (except `index.ts`) now lives in `src/common/`; `src/` root only holds the router entry and the four route subdirectories. Routes are namespaced per provider (`/github/oauth`, `/github/callback`) to leave room for additional providers under `src/oauth/` and `src/callback/` later.
@@ -165,6 +170,15 @@ All TypeScript that used to sit directly under `src/` (except `index.ts`) now li
   so the update has no `query_id` and the webhook just acks it. Assign the bot in
   group settings → *Approve new members*. (There is no DM fallback; the bot must
   be the guard bot.)
+- **Bot can't approve/decline (`CHAT_ADMIN_REQUIRED` / `not enough rights`):** the
+  callback now resolves join requests via `approveChatJoinRequest` /
+  `declineChatJoinRequest`, both of which require the bot to be an administrator in
+  the group with the **Add Members** (`can_invite_users`) right. Add/re-promote the
+  bot as admin with that right. (The earlier `answerChatJoinRequestQuery` path used
+  the join-request `query_id` instead, but that id expires quickly once GitHub OAuth
+  bounces through the browser, returning `query is too old and response timeout
+  expired or query ID is invalid` — which is why the Worker switched to
+  `chat_id`/`user_id`-based resolution.)
 - **`tg sendChatJoinRequestWebApp: Not Found`:** the method exists (Bot API 10.1+)
   but Telegram rejects it for this bot — `supports_join_request_queries` is off in
   BotFather, or no Mini App is configured. Enable both and re-check `getMe`.
