@@ -3,11 +3,14 @@
 // the token makes the token path invalid and Telegram returns 404 Not Found.
 const API = "https://api.telegram.org/bot";
 
-export type JoinRequestResult = "approve" | "decline" | "queue";
-
-// Used by the GitHub OAuth callback (/auth/callback) to resolve a join request.
-// That handler is not a Telegram webhook, so it can't use the webhook-reply
-// pattern and makes a normal Bot API request.
+// Used by the GitHub OAuth callback to resolve a join request. The callback is
+// not a Telegram webhook, so it makes a normal Bot API request.
+//
+// We use approveChatJoinRequest / declineChatJoinRequest (chat_id + user_id)
+// rather than answerChatJoinRequestQuery, whose query_id expires quickly and
+// reliably fails with "query is too old" by the time the GitHub OAuth round-trip
+// completes. The chat_id and user_id are both Telegram-signed inside initData,
+// so they are just as trustworthy and have no expiry tied to the query.
 async function tg(token: string, method: string, body: Record<string, unknown>): Promise<unknown> {
   const r = await fetch(`${API}${token}/${method}`, {
     method: "POST",
@@ -21,14 +24,10 @@ async function tg(token: string, method: string, body: Record<string, unknown>):
   return j.result;
 }
 
-// Bot API 10.1: resolve the join request query (approve / decline / queue).
-export function answerChatJoinRequestQuery(
-  token: string,
-  queryId: string,
-  result: JoinRequestResult,
-): Promise<unknown> {
-  return tg(token, "answerChatJoinRequestQuery", {
-    chat_join_request_query_id: queryId,
-    result,
-  });
+export function approveChatJoinRequest(token: string, chatId: number, userId: number): Promise<unknown> {
+  return tg(token, "approveChatJoinRequest", { chat_id: chatId, user_id: userId });
+}
+
+export function declineChatJoinRequest(token: string, chatId: number, userId: number): Promise<unknown> {
+  return tg(token, "declineChatJoinRequest", { chat_id: chatId, user_id: userId });
 }

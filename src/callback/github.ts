@@ -8,7 +8,8 @@ import { escapeHtml, html } from "../common/utils";
 // /github/callback — GitHub OAuth callback.
 //
 // Validates the initData carried as `state`, quality-checks the GitHub account,
-// resolves the join request via answerChatJoinRequestQuery. No session storage.
+// resolves the join request via approveChatJoinRequest / declineChatJoinRequest.
+// No session storage.
 //
 // Error policy: the happy path throws nothing of its own — every failure bubbles
 // to the single outer try/catch. Account-quality / dedup failures throw DenyError
@@ -33,10 +34,6 @@ function logErr(label: string, e: unknown): void {
   console.error(label + ":", e instanceof Error ? e.message : String(e));
 }
 
-async function resolve(config: Config, queryId: string, result: tg.JoinRequestResult): Promise<void> {
-  await tg.answerChatJoinRequestQuery(config.botToken, queryId, result);
-}
-
 export async function handleGithubCallback(url: URL, config: Config): Promise<Response> {
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state"); // the Telegram-signed initData
@@ -48,11 +45,14 @@ export async function handleGithubCallback(url: URL, config: Config): Promise<Re
   if (!code || !state) return html(resultPage("error", "Missing code or state.", null));
 
   const result = await validateInitData(state, config.botToken, config.initDataMaxAgeSec);
-  if (!result.ok || !result.data || !result.data.user || !result.data.chat_join_request_query_id) {
+  if (!result.ok || !result.data || !result.data.user || !result.data.chat) {
     return html(resultPage("error", "Telegram identity invalid or expired. Please request to join the group again.", null));
   }
-  const queryId = result.data.chat_join_request_query_id;
+  const chatId = result.data.chat?.id;
   const tgUserId = result.data.user.id;
+  if (chatId === undefined) {
+    return html(resultPage("error", "Missing chat context in Telegram identity. Please request to join the group again.", null));
+  }
 
   const redirectUri = `${url.origin}/github/callback`;
 
@@ -74,7 +74,7 @@ export async function handleGithubCallback(url: URL, config: Config): Promise<Re
     // approve call instead of re-processing.
     const existing = await kv.getVerification(config.kv, tgUserId);
     if (existing && existing.github_id === user.id) {
-      await resolve(config, queryId, "approve");
+      await tg.approveChatJoinRequest(config.botToken, chatId, tgUserId);
       return html(resultPage("approved", undefined, user.login));
     }
 
@@ -93,20 +93,21 @@ export async function handleGithubCallback(url: URL, config: Config): Promise<Re
       verified_at: Date.now(),
     });
     await kv.setGithubOwner(config.kv, user.id, tgUserId);
-    await resolve(config, queryId, "approve");
+    await tg.approveChatJoinRequest(config.botToken, chatId, tgUserId);
     return html(resultPage("approved", undefined, user.login));
   } catch (e) {
-    // Account issue → decline and tell the user why. Everything else → queue for
-    // admin review (the initData state is still valid, so the user can also retry
-    // from the Mini App's button). The Telegram side-effect is best-effort: if it
-    // itself fails we still render the page so the user isn't left staring at a
-    // blank 500.
+    // Account issue → decline and tell the user why. Everything else → leave
+    // the join request open for manual admin review (the initData state is still
+    // valid, so the user can also retry from the Mini App's button). The Telegram
+    // side-effect is best-effort: if it itself fails we still render the page so
+    // the user isn't left staring at a blank 500.
     if (e instanceof DenyError) {
-      await resolve(config, queryId, "decline").catch((err) => logErr("decline failed", err));
+      await tg.declineChatJoinRequest(config.botToken, chatId, tgUserId).catch((err) => logErr("decline failed", err));
       return html(resultPage("declined", e.message, e.login));
     }
+    // Transient/uncertain failure: leave the join request open for manual admin
+    // review rather than auto-deciding it.
     const msg = e instanceof Error ? e.message : "verification failed";
-    await resolve(config, queryId, "queue").catch((err) => logErr("queue failed", err));
     return html(resultPage("queued", msg, null));
   }
 }

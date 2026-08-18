@@ -22,8 +22,11 @@ export interface InitData {
   user?: WebAppUser;
   auth_date?: number;
   query_id?: string;
-  // Bot API 10.1 join-request launch context: the id to pass to
-  // answerChatJoinRequestQuery. Absent in other Mini App launch contexts.
+  // Bot API 10.1 join-request launch context: marks this initData as coming
+  // from a join-request flow. Absent in other Mini App launch contexts. Used
+  // by /github/oauth to gate the flow on a real join-request context; the
+  // callback resolves the request via approveChatJoinRequest (chat_id +
+  // user_id) instead, so this field is no longer consumed downstream.
   chat_join_request_query_id?: string;
   chat?: WebAppChat;
   chat_instance?: string;
