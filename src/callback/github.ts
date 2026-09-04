@@ -146,12 +146,16 @@ function resultPage(kind: ResultKind, message: string | undefined, login: string
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(meta.title)}</title>
 <style>
+:root{color-scheme:light dark;--bg:#f7f7f8;--fg:#111;--card:#fff;--muted:#6b7280;--msg:#374151;--shadow:rgba(0,0,0,.06)}
+@media (prefers-color-scheme:dark){
+:root{--bg:#111214;--fg:#e8eaed;--card:#1d1f24;--muted:#9aa2ad;--msg:#c8cdd4;--shadow:rgba(0,0,0,.4)}
+}
 body{margin:0;min-height:100dvh;display:flex;align-items:center;justify-content:center;
-background:#f7f7f8;color:#111;font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:24px}
-.card{max-width:440px;width:100%;text-align:center;background:#fff;border-radius:18px;padding:32px 24px;box-shadow:0 6px 24px rgba(0,0,0,.06)}
+background:var(--bg);color:var(--fg);font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:24px}
+.card{max-width:440px;width:100%;text-align:center;background:var(--card);border-radius:18px;padding:32px 24px;box-shadow:0 6px 24px var(--shadow)}
 h1{margin:0 0 8px;font-size:22px;color:${meta.color}}
-p{color:#6b7280;margin:0 0 12px}
-.msg{color:#374151}
-.who{margin-top:14px;font-size:14px;color:#6b7280}
+p{color:var(--muted);margin:0 0 12px}
+.msg{color:var(--msg)}
+.who{margin-top:14px;font-size:14px;color:var(--muted)}
 </style></head><body><div class="card"><h1>${escapeHtml(meta.title)}</h1>${msg}${meta.extra}${who}</div></body></html>`;
 }

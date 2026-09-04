@@ -7,13 +7,28 @@
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   :root {
-    --bg: var(--tg-theme-bg-color, #ffffff);
-    --fg: var(--tg-theme-text-color, #111111);
-    --muted: var(--tg-theme-hint-color, #6b7280);
+    color-scheme: light dark;
+    /* Fallbacks for when the page is opened outside Telegram's theme injection;
+       overridden by the prefers-color-scheme: dark block below. */
+    --fallback-bg: #ffffff;
+    --fallback-fg: #111111;
+    --fallback-muted: #6b7280;
+    --fallback-section: #f3f4f6;
+    --bg: var(--tg-theme-bg-color, var(--fallback-bg));
+    --fg: var(--tg-theme-text-color, var(--fallback-fg));
+    --muted: var(--tg-theme-hint-color, var(--fallback-muted));
     --accent: var(--tg-theme-button-color, #2f6df5);
     --accent-fg: var(--tg-theme-button-text-color, #ffffff);
-    --section: var(--tg-theme-secondary-bg-color, #f3f4f6);
+    --section: var(--tg-theme-secondary-bg-color, var(--fallback-section));
     --danger: #dc2626;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fallback-bg: #17212b;
+      --fallback-fg: #f2f4f7;
+      --fallback-muted: #9aa5b1;
+      --fallback-section: #1f2c39;
+    }
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
